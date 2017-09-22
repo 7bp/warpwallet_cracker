@@ -2,64 +2,98 @@ package main
 
 import (
   pbkdf2 "github.com/ctz/go-fastpbkdf2"
-	"golang.org/x/crypto/scrypt"
+  "golang.org/x/crypto/scrypt"
   "unsafe"
-	"crypto/sha256"
-	"fmt"
-	"time"
-	"os"
-	"math/rand"
-	"github.com/vsergeev/btckeygenie/btckey"
+  "crypto/sha256"
+  "fmt"
+  "time"
+  "os"
+  "math/rand"
+  "github.com/vsergeev/btckeygenie/btckey"
+  "strings"
 )
+
+var stop uint64 = 218340105584896
+var run uint64 = 0
 
 const wordSize = int(unsafe.Sizeof(uintptr(0)))
 var c chan []byte // goroutine channel
 const letterBytes = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 func random(r *rand.Rand, n int) string {
-    b := make([]byte, n)
-	for i := range b {
+  b := make([]byte, n)
+  for i := range b {
         b[i] = letterBytes[r.Intn(62)]
     }
 
     return string(b)
 }
 
+func Encode(number uint64) string {
+  if number == 0 {
+    return string(letterBytes[0])
+  }
+
+  chars := make([]byte, 0)
+
+  length := uint64(len(letterBytes))
+
+  for number > 0 {
+    result    := number / length
+    remainder := number % length
+    chars   = append(chars, letterBytes[remainder])
+    number  = result
+  }
+
+  for i, j := 0, len(chars) - 1; i < j; i, j = i + 1, j - 1 {
+    chars[i], chars[j] = chars[j], chars[i]
+  }
+
+  return string(chars)
+}
+
+func leftPad2Len(s string, padStr string, overallLen int) string{
+  var padCountInt int
+  padCountInt = 1 + ((overallLen-len(padStr))/len(padStr))
+  var retStr = strings.Repeat(padStr, padCountInt) + s
+  return retStr[(len(retStr)-overallLen):]
+}
+
 func main () {
-	r := rand.New(rand.NewSource(time.Now().Unix()))
   c = make(chan []byte)
+  
+  var address string
+  saltValue := ""
 
-	var address string
-	saltValue := ""
+  if len(os.Args) >= 2 {
+    address = os.Args[1]
+    if len(os.Args) == 3 {
+      saltValue = os.Args[2]
+    } else {
+      saltValue = "";
+    }
+  } else {
+    fmt.Printf("Usage: %s [Address] [Salt - optional]\n\n", os.Args[0])
+    os.Exit(0)
+  }
 
-	if len(os.Args) >= 2 {
-		address = os.Args[1]
-		if len(os.Args) == 3 {
-			saltValue = os.Args[2]
-		} else {
-			saltValue = "";
-		}
-	} else {
-		fmt.Printf("Usage: %s [Address] [Salt - optional]\n\n", os.Args[0])
-		os.Exit(0)
-	}
+  fmt.Printf("Using address \"%s\" and salt \"%s\"\n", address, saltValue)
 
-	fmt.Printf("Using address \"%s\" and salt \"%s\"\n", address, saltValue)
-
-	tries := 0
-	start := time.Now()
-	for {
-		passphraseValue := random(r, 8)
-		result := bruteforce(passphraseValue, saltValue, address);
-		if result != "" {
-			fmt.Printf("Found! Passphrase %s\n", passphraseValue)
-			os.Exit(0)
-		} else {
-			tries += 1
+  tries := 0
+  start := time.Now()
+  for {
+    passphraseValue := leftPad2Len(Encode(run), "0", 8)
+    result := bruteforce(passphraseValue, saltValue, address);
+    if result != "" {
+      fmt.Printf("Found! Passphrase %s\n", passphraseValue)
+      os.Exit(0)
+    } else {
+      tries += 1
       timeElapsed := time.Since(start)
       hashRate := float64(tries) / (timeElapsed.Seconds())
-			fmt.Printf("\rspeed=%.2fh/s, last=%s, tries=%d, elapsed=%s", hashRate, passphraseValue, tries, timeElapsed)
-		}
-	}
+      fmt.Printf("\rspeed=%.2fh/s, last=%s, tries=%d, elapsed=%s", hashRate, passphraseValue, tries, timeElapsed)
+    }
+    run = run + 1
+  }
 }
 
 func bruteforce(passphraseValue string, saltValue string, address string) string {
@@ -73,17 +107,17 @@ func bruteforce(passphraseValue string, saltValue string, address string) string
   result := make([]byte, 32)
   fastXORWords(result, key1, key2)
 
-	err = priv.FromBytes(result)
-	if err != nil {
-		fmt.Printf("Error importing private key: %s [%s]\n", err, passphraseValue)
-		return ""
-	}
+  err = priv.FromBytes(result)
+  if err != nil {
+    fmt.Printf("Error importing private key: %s [%s]\n", err, passphraseValue)
+    return ""
+  }
 
-	if (priv.ToAddressUncompressed() == address) {
-		return passphraseValue
-	}
+  if (priv.ToAddressUncompressed() == address) {
+    return passphraseValue
+  }
 
-	return ""
+  return ""
 }
 
 func doScrypt(pass string, salt string, c chan []byte) {
@@ -99,11 +133,11 @@ func doPbkdf2(pass string, salt string, c chan []byte) {
 // fastXORWords XORs multiples of 4 or 8 bytes (depending on architecture.)
 // The arguments are assumed to be of equal length.
 func fastXORWords(dst, a, b []byte) {
-	dw := *(*[]uintptr)(unsafe.Pointer(&dst))
-	aw := *(*[]uintptr)(unsafe.Pointer(&a))
-	bw := *(*[]uintptr)(unsafe.Pointer(&b))
-	n := len(b) / wordSize
-	for i := 0; i < n; i++ {
-		dw[i] = aw[i] ^ bw[i]
-	}
+  dw := *(*[]uintptr)(unsafe.Pointer(&dst))
+  aw := *(*[]uintptr)(unsafe.Pointer(&a))
+  bw := *(*[]uintptr)(unsafe.Pointer(&b))
+  n := len(b) / wordSize
+  for i := 0; i < n; i++ {
+    dw[i] = aw[i] ^ bw[i]
+  }
 }
